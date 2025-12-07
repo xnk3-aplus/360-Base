@@ -3,6 +3,7 @@ import json
 import pytz
 from datetime import datetime
 import os
+import pandas as pd
 from dotenv import load_dotenv
 
 load_dotenv()
@@ -276,6 +277,8 @@ def get_workflow_data(employee_name, limit=10):
         print(f"   - Quá hạn: {len(overdue_jobs)}")
         print(f"   - Sắp đến hạn: {len(upcoming_deadline_jobs)}")
         
+        raw_df_records = pd.DataFrame(employee_jobs).astype(str).to_dict(orient="records") if employee_jobs else []
+
         return {
             'summary': {
                 'total_jobs': total_jobs,
@@ -290,7 +293,8 @@ def get_workflow_data(employee_name, limit=10):
                 'no_deadline_count': no_deadline_count,
                 'overdue_jobs': overdue_jobs,
                 'upcoming_deadline_jobs': upcoming_deadline_jobs
-            }
+            },
+            'raw_df_records': raw_df_records
         }
     except Exception as e:
         print(f"❌ Lỗi khi lấy dữ liệu Workflow: {e}")

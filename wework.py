@@ -801,6 +801,10 @@ def get_wework_data(username):
             'overdue_tasks': overdue_tasks,
             'upcoming_deadline_tasks': upcoming_deadline_tasks
         }
+
+        # Raw dataframe records cho MCP
+        raw_df_records = pd.DataFrame(filtered_tasks).astype(str).to_dict(orient="records") if filtered_tasks else []
+        result['raw_df_records'] = raw_df_records
         
         if result:
             summary = result.get('summary', {})

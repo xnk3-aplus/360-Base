@@ -4,6 +4,7 @@ from html import unescape
 from datetime import datetime
 import pytz
 import os
+import pandas as pd
 from dotenv import load_dotenv
 
 load_dotenv()
@@ -271,6 +272,8 @@ def get_inside_data(employee_name, limit=5):
         print(f"   - Reactions đã cho: {employee_reactions_given}")
         print(f"   - Views đã cho: {employee_views_given}")
         
+        raw_df_records = pd.DataFrame(all_items).astype(str).to_dict(orient="records") if all_items else []
+
         return {
             'summary': {
                 'total_posts': total_posts,
@@ -282,7 +285,8 @@ def get_inside_data(employee_name, limit=5):
                 'employee_reactions_given': employee_reactions_given,  # Reactions đã cho
                 'employee_views_given': employee_views_given  # Views đã cho
             },
-            'latest_posts': latest_posts_info
+            'latest_posts': latest_posts_info,
+            'raw_df_records': raw_df_records
         }
     except Exception as e:
         print(f"❌ Lỗi khi lấy dữ liệu Inside: {e}")

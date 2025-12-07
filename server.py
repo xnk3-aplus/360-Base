@@ -78,8 +78,12 @@ docstring = """
 
     The returned data is a dictionary containing:
         - user_info: Basic user details resolved from the Name (username, id, email).
-        - sources: A dictionary with keys 'checkin', 'wework', 'goal', 'workflow', 'inside',
-                   each containing the respective data or an error message if fetch failed.
+        - full_email_html: Full HTML email composed from all modules.
+        - sources: A dictionary với các key 'checkin', 'wework', 'goal', 'workflow', 'inside'.
+                   Mỗi entry gồm:
+                       - content_box_html: HTML đã render cho từng module.
+                       - raw_data: Dữ liệu gốc dạng DataFrame (to_dict records) cho module đó.
+        - email_content: (legacy) The same content_box_html entries without raw data.
 
     Args:
         name: Full name of the employee (e.g., 'Ngô Thị Thủy', 'Phạm Thanh Tùng').
@@ -175,9 +179,26 @@ async def get_base_data_by_name(
 
 
     # Combine everything (only returning sections as requested)
+    sections = formatted_output["sections"]
+    sources_with_raw = {}
+    for key in ["checkin", "wework", "goal", "workflow", "inside"]:
+        raw_entry = raw_results.get(key)
+        raw_data_payload = None
+        if isinstance(raw_entry, dict) and "raw_df_records" in raw_entry:
+            raw_data_payload = raw_entry.get("raw_df_records")
+        else:
+            raw_data_payload = raw_entry
+
+        sources_with_raw[key] = {
+            "content_box_html": sections.get(key, ""),
+            "raw_data": raw_data_payload
+        }
+
     final_response = {
         "user_info": user_info,
-        "email_content": formatted_output["sections"]
+        "full_email_html": formatted_output.get("full_email_html", ""),
+        "sources": sources_with_raw,
+        "email_content": sections  # giữ compatibility cho client cũ
     }
 
     return final_response

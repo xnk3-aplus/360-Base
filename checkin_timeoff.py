@@ -1404,6 +1404,11 @@ def get_checkin_data(employee_name, year, month):
                                       if rec['status'] == 'present' and 
                                       start_week <= rec['date'] <= end_week)
 
+        raw_df_records = {
+            "checkin": df_checkin.astype(str).to_dict(orient="records") if df_checkin is not None else [],
+            "timeoff": df_timeoff.astype(str).to_dict(orient="records") if df_timeoff is not None else []
+        }
+
         return {
             'summary': report['summary'],
             'period': report['period'],
@@ -1413,7 +1418,8 @@ def get_checkin_data(employee_name, year, month):
             'checkin_count_period': checkin_count_period, # Công tuần này (approx)
             'last_checkin': last_checkin_str,
             'late_count': report['summary']['late_count'],
-            'missing_days': report['summary']['days_missing']
+            'missing_days': report['summary']['days_missing'],
+            'raw_df_records': raw_df_records
         }
             
     except Exception as e:

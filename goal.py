@@ -1708,6 +1708,8 @@ def get_goal_data(employee_name):
         goals_list = []
         fraction_of_time = 0.0
 
+        raw_goal_records = []
+
         if employee_user_id:
             # Lấy dữ liệu goals từ API (thông qua analyzer.api_client)
             # Lưu ý: analyzer.api_client là object APIClient được khởi tạo trong OKRAnalysisSystem
@@ -1741,6 +1743,9 @@ def get_goal_data(employee_name):
                     else:
                         fraction_of_time = min(days_passed / cycle_duration_days, 1.0)
                 
+                if not user_goals.empty:
+                    raw_goal_records = user_goals.astype(str).to_dict(orient="records")
+
                 for _, row in user_goals.iterrows():
                     current_val = float(row.get('goal_current_value', 0))
                     # Target value thường là 100% cho OKR, hoặc cần lấy từ target nếu có. 
@@ -1769,7 +1774,8 @@ def get_goal_data(employee_name):
             'overall_behavior': employee_overall_checkin,
             'cycle_name': cycles[0]['name'],
             'goals_list': goals_list,
-            'fraction_of_time': fraction_of_time
+            'fraction_of_time': fraction_of_time,
+            'raw_df_records': raw_goal_records
         }
     except Exception as e:
         print(f"❌ Lỗi khi lấy dữ liệu Goal: {e}")
