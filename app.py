@@ -8,6 +8,11 @@ from datetime import datetime, timedelta
 import pytz
 from ollama import Client
 import traceback
+import os
+from dotenv import load_dotenv
+
+# Load environment variables
+load_dotenv()
 
 # Import modules
 from checkin_timeoff import get_checkin_data
@@ -19,14 +24,14 @@ from workflow import get_workflow_data
 # ============================================================================
 # CẤU HÌNH (CONSTANTS)
 # ============================================================================
-EMAIL_GUI = "apluscorp.hr@gmail.com"
-MAT_KHAU = 'mems nctq yxss gruw'  # Mật khẩu ứng dụng
+EMAIL_GUI = os.getenv('EMAIL_GUI')
+MAT_KHAU = os.getenv('MAT_KHAU')  # Mật khẩu ứng dụng
 # EMAIL_NHAN = "info@apluscorp.vn"
 EMAIL_NHAN = "tts122403@gmail.com"
 
 # API TOKENS (Cần thiết cho app.py để tìm kiếm nhân viên)
-WEWORK_ACCESS_TOKEN = "5654-FCVE2Z8T53L7WTFKVXFP2PTM9MUABP6WRU5LCY6E365RY6TCSRYY4GTAJ48WJEMV-THT9F7ZZNPVMGBNV3FTB8P2QZF5HN2FW9HKV7J64MXDV8BQWN43SK3DUCBJP6JT2"
-ACCOUNT_ACCESS_TOKEN = "5654-YSF4AEQETWWP9PQS6ZGM5S5UUEYDG8C4DTTW66AFYA5RBQQR3W4CPWWH97N5XF6E-XWJ22ZYFDPXKU4PJVDM3JC9ZVKPT2DKBQ8R57CBFMF3G8JKZAF7GESQNVZCEAR39"
+WEWORK_ACCESS_TOKEN = os.getenv('WEWORK_ACCESS_TOKEN')
+ACCOUNT_ACCESS_TOKEN = os.getenv('ACCOUNT_ACCESS_TOKEN')
 
 DEFAULT_EMPLOYEE_NAME = "Phạm Thanh Tùng"
 hcm_tz = pytz.timezone('Asia/Ho_Chi_Minh')
