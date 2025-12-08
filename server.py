@@ -23,14 +23,9 @@ def normalize_search_name(name):
     if not name: return ""
     return unicodedata.normalize('NFC', name).strip().lower()
 
-def find_user_info_by_name(target_name: str) -> Optional[Dict[str, str]]:
-    """
-    Find user info (username, name) via Account API using name.
-    """
+def fetch_all_users() -> list:
+    """Helper to fetch all users from Account API."""
     try:
-        target_normalized = normalize_search_name(target_name)
-        
-        # Search in Account API
         url = "https://account.base.vn/extapi/v1/users"
         payload = {'access_token': ACCOUNT_TOKEN}
         headers = {'Content-Type': 'application/x-www-form-urlencoded'}
@@ -39,28 +34,40 @@ def find_user_info_by_name(target_name: str) -> Optional[Dict[str, str]]:
         
         if response.status_code == 200:
             response_json = response.json()
-            user_list = []
             if isinstance(response_json, list):
-                user_list = response_json
+                return response_json
             elif isinstance(response_json, dict):
-                user_list = response_json.get('users', [])
-            
-            # Find best match
-            for user in user_list:
-                u_name = user.get('name', '')
-                if normalize_search_name(u_name) == target_normalized:
-                    return {
-                        'name': u_name,
-                        'username': user.get('username', ''),
-                        'id': str(user.get('id', ''))
-                    }
-                    
-            # Relaxation: partial match if exact match fail? 
-            # For now stick to exact normalized match to be safe.
-            
+                return response_json.get('users', [])
     except Exception as e:
-        print(f"Error finding user: {e}")
+        print(f"Error fetching users: {e}")
+    return []
+
+def find_user_info_by_name(target_name: str) -> Optional[Dict[str, str]]:
+    """
+    Find user info (username, name) via Account API using name.
+    """
+    target_normalized = normalize_search_name(target_name)
+    user_list = fetch_all_users()
+    
+    # Find best match
+    for user in user_list:
+        u_name = user.get('name', '')
+        if normalize_search_name(u_name) == target_normalized:
+            return {
+                'name': u_name,
+                'username': user.get('username', ''),
+                'id': str(user.get('id', ''))
+            }
+            
+    # Relaxation: partial match if exact match fail? 
+    # For now stick to exact normalized match to be safe.
     return None
+
+@mcp.resource("base://employees")
+def get_employees() -> list:
+    """Returns a list of all employees and their information."""
+    return fetch_all_users()
+
 
 
 docstring = """
@@ -80,9 +87,7 @@ docstring = """
         - user_info: Basic user details resolved from the Name (username, id, email).
         - section: Dữ liệu đã phân tích cho từng module (checkin, wework, goal, workflow, inside),
                    gồm data (đầu vào content box) và raw_data (raw_df_records). Không trả về HTML.
-        - sources: A dictionary với các key 'checkin', 'wework', 'goal', 'workflow', 'inside'.
-                   Mỗi entry gồm:
-                       - raw_data: Dữ liệu gốc dạng DataFrame (to_dict records) cho module đó.
+                   Chỉ trả section, bỏ sources_with_raw để giảm payload.
 
     Args:
         name: Full name of the employee (e.g., 'Ngô Thị Thủy', 'Phạm Thanh Tùng').
@@ -113,7 +118,7 @@ docstring = """
         "openWorldHint": True
     }
 )
-async def get_base_data_by_name(
+async def get_base_data_logic(
     name: str,
     year: int = 2025,
     month: int = 12
@@ -164,7 +169,6 @@ async def get_base_data_by_name(
 
     # 3. Kết hợp dữ liệu (không trả về HTML)
     module_keys = ["checkin", "wework", "goal", "workflow", "inside"]
-    sources_with_raw = {}
     section_data = {}
 
     for key in module_keys:
@@ -178,12 +182,7 @@ async def get_base_data_by_name(
         else:
             raw_data_payload = raw_entry
 
-        # Legacy-style sources payload (chỉ raw_data, không HTML)
-        sources_with_raw[key] = {
-            "raw_data": raw_data_payload
-        }
-
-        # New section payload: analyzed data + raw data (không HTML)
+        # Section payload: analyzed data + raw data (không HTML)
         section_data[key] = {
             "data": analyzed_payload,
             "raw_data": raw_data_payload
@@ -191,11 +190,26 @@ async def get_base_data_by_name(
 
     final_response = {
         "user_info": user_info,
-        "section": section_data,
-        "sources": sources_with_raw
+        "section": section_data
     }
 
     return final_response
+
+@mcp.tool(
+    name="get_base_data_by_name",
+    description=docstring,
+    annotations={
+        "readOnlyHint": True,
+        "destructiveHint": False,
+        "openWorldHint": True
+    }
+)
+async def get_base_data_by_name(
+    name: str,
+    year: int = 2025,
+    month: int = 12
+) -> Dict[str, Any]:
+    return await get_base_data_logic(name, year, month)
 
 if __name__ == '__main__':
     mcp.run()
