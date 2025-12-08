@@ -78,12 +78,11 @@ docstring = """
 
     The returned data is a dictionary containing:
         - user_info: Basic user details resolved from the Name (username, id, email).
-        - full_email_html: Full HTML email composed from all modules.
+        - section: Dữ liệu đã phân tích cho từng module (checkin, wework, goal, workflow, inside),
+                   gồm data (đầu vào content box) và raw_data (raw_df_records). Không trả về HTML.
         - sources: A dictionary với các key 'checkin', 'wework', 'goal', 'workflow', 'inside'.
                    Mỗi entry gồm:
-                       - content_box_html: HTML đã render cho từng module.
                        - raw_data: Dữ liệu gốc dạng DataFrame (to_dict records) cho module đó.
-        - email_content: (legacy) The same content_box_html entries without raw data.
 
     Args:
         name: Full name of the employee (e.g., 'Ngô Thị Thủy', 'Phạm Thanh Tùng').
@@ -104,10 +103,6 @@ docstring = """
         >>> # Get report for specific time
         >>> result = get_base_data_by_name("Ngô Thị Thủy", year=2024, month=11)
 """
-
-from base_formatter import format_email_content
-
-# ... imports ...
 
 @mcp.tool(
     name="get_base_data_by_name",
@@ -167,38 +162,37 @@ async def get_base_data_by_name(
     except Exception as e:
         raw_results["inside"] = None
 
-    # 3. Format Data into HTML Content Boxes
-    formatted_output = format_email_content(
-        full_name,
-        raw_results["checkin"],
-        raw_results["wework"],
-        raw_results["goal"],
-        raw_results["inside"],
-        raw_results["workflow"]
-    )
-
-
-    # Combine everything (only returning sections as requested)
-    sections = formatted_output["sections"]
+    # 3. Kết hợp dữ liệu (không trả về HTML)
+    module_keys = ["checkin", "wework", "goal", "workflow", "inside"]
     sources_with_raw = {}
-    for key in ["checkin", "wework", "goal", "workflow", "inside"]:
+    section_data = {}
+
+    for key in module_keys:
         raw_entry = raw_results.get(key)
         raw_data_payload = None
+        analyzed_payload = raw_entry
+
         if isinstance(raw_entry, dict) and "raw_df_records" in raw_entry:
             raw_data_payload = raw_entry.get("raw_df_records")
+            analyzed_payload = {k: v for k, v in raw_entry.items() if k != "raw_df_records"}
         else:
             raw_data_payload = raw_entry
 
+        # Legacy-style sources payload (chỉ raw_data, không HTML)
         sources_with_raw[key] = {
-            "content_box_html": sections.get(key, ""),
+            "raw_data": raw_data_payload
+        }
+
+        # New section payload: analyzed data + raw data (không HTML)
+        section_data[key] = {
+            "data": analyzed_payload,
             "raw_data": raw_data_payload
         }
 
     final_response = {
         "user_info": user_info,
-        "full_email_html": formatted_output.get("full_email_html", ""),
-        "sources": sources_with_raw,
-        "email_content": sections  # giữ compatibility cho client cũ
+        "section": section_data,
+        "sources": sources_with_raw
     }
 
     return final_response
