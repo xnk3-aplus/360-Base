@@ -15,6 +15,16 @@ ACCOUNT_ACCESS_TOKEN = os.getenv('ACCOUNT_ACCESS_TOKEN')
 
 hcm_tz = pytz.timezone('Asia/Ho_Chi_Minh')
 
+# Token detection helpers
+def get_account_auth_data():
+    """Get authentication data dict with correct key for token v1 or v2"""
+    key = "access_token_v2" if "~" in ACCOUNT_ACCESS_TOKEN else "access_token"
+    return {key: ACCOUNT_ACCESS_TOKEN}
+
+def get_inside_token_key():
+    """Get correct key for inside API token"""
+    return "access_token_v2" if "~" in INSIDE_API_KEY else "access_token"
+
 # Global variable for user mapping
 user_id_to_name_map = {}
 
@@ -23,9 +33,7 @@ def load_user_mapping():
     global user_id_to_name_map
     try:
         url = "https://account.base.vn/extapi/v1/users/get_list"
-        payload = {
-            'access_token': ACCOUNT_ACCESS_TOKEN
-        }
+        payload = get_account_auth_data()
         headers = {'Content-Type': 'application/x-www-form-urlencoded'}
         
         response = requests.post(url, headers=headers, data=payload, timeout=30)
@@ -92,7 +100,8 @@ def get_all_news_and_articles(max_pages=10):
     print("   📰 Đang tải news...")
     page = 1
     while page <= max_pages:
-        url = f"https://inside.base.vn/extapi/v2/companynews/get?access_token={INSIDE_API_KEY}&page={page}"
+        token_key = get_inside_token_key()
+        url = f"https://inside.base.vn/extapi/v2/companynews/get?{token_key}={INSIDE_API_KEY}&page={page}"
         try:
             response = requests.get(url, timeout=30)
             if response.status_code != 200:
@@ -123,7 +132,8 @@ def get_all_news_and_articles(max_pages=10):
     print("   📄 Đang tải articles...")
     page = 1
     while page <= max_pages:
-        url = f"https://inside.base.vn/extapi/v2/articles/get?access_token={INSIDE_API_KEY}&page={page}"
+        token_key = get_inside_token_key()
+        url = f"https://inside.base.vn/extapi/v2/articles/get?{token_key}={INSIDE_API_KEY}&page={page}"
         try:
             response = requests.get(url, timeout=30)
             if response.status_code != 200:

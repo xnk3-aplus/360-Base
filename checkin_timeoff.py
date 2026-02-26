@@ -26,7 +26,7 @@ STANDARD_END_MINUTE = 30
 # TOKENS
 CHECKIN_TOKEN = os.getenv('CHECKIN_TOKEN')
 TIMEOFF_TOKEN = os.getenv('TIMEOFF_TOKEN')
-ACCOUNT_TOKEN = os.getenv('ACCOUNT_TOKEN')
+ACCOUNT_TOKEN = os.getenv('ACCOUNT_ACCESS_TOKEN')
 
 # Config
 hcm_tz = pytz.timezone('Asia/Ho_Chi_Minh')
@@ -226,7 +226,13 @@ class EmployeeManager:
         self.request_timeout = 30
         self.username_to_name_map = {}
         self.username_to_since_map = {}
+        # Auto-detect token version
+        self.account_token_key = "access_token_v2" if "~" in account_token else "access_token"
         self._load_employee_mapping()
+    
+    def _get_account_auth_data(self):
+        """Get authentication data with correct key"""
+        return {self.account_token_key: self.account_token}
     
     def _make_request(self, url: str, data: Dict, description: str = "") -> requests.Response:
         try:
@@ -239,7 +245,7 @@ class EmployeeManager:
     
     def _load_employee_mapping(self):
         url = "https://account.base.vn/extapi/v1/group/get"
-        data = {"access_token": self.account_token, "path": "nvvanphong"}
+        data = {**self._get_account_auth_data(), "path": "nvvanphong"}
         
         try:
             response = self._make_request(url, data, "fetching account members")
@@ -278,12 +284,14 @@ class TimeoffProcessor:
     def __init__(self, timeoff_token: str, account_token: str):
         self.timeoff_token = timeoff_token
         self.employee_manager = EmployeeManager(account_token)
+        # Auto-detect token version  
+        self.timeoff_token_key = "access_token_v2" if "~" in timeoff_token else "access_token"
         
     def get_base_timeoff_data(self, start_date=None, end_date=None, start_date_from=None, start_date_to=None, end_date_from=None, end_date_to=None):
         url = "https://timeoff.base.vn/extapi/v1/timeoff/list"
 
         # Tạo payload với các tham số tùy chọn
-        payload_data = {'access_token': self.timeoff_token,'items_per_page': 100}
+        payload_data = {self.timeoff_token_key: self.timeoff_token, 'items_per_page': 100}
 
         if start_date_from:
             payload_data['start_date_from'] = start_date_from
@@ -570,6 +578,8 @@ class CheckinLoader:
     
     def __init__(self, token: str):
         self.token = token
+        # Auto-detect token version
+        self.token_key = "access_token_v2" if "~" in token else "access_token"
     
     def load_checkin_data(self, start_date=None, end_date=None):
         url = "https://checkin.base.vn/extapi/v1/getlogs"
@@ -585,7 +595,7 @@ class CheckinLoader:
         end_timestamp = int(end_date.timestamp())
         
         payload = {
-            'access_token': self.token,
+            self.token_key: self.token,
             'start_date': start_timestamp,
             'end_date': end_timestamp
         }
@@ -596,9 +606,14 @@ class CheckinLoader:
             data = response.json()
             
             if data.get('code') != 1:
+                print(f"DEBUG: CheckinLoader API returned code {data.get('code')}")
                 return pd.DataFrame()
             
-            return self._parse_checkin_data(data)
+            df = self._parse_checkin_data(data)
+            print(f"DEBUG: CheckinLoader loaded {len(df)} records. Columns: {df.columns.tolist()}")
+            if not df.empty:
+                 print(f"DEBUG: Sample employee_name from logs: {df['employee_name'].unique()[:3]}")
+            return df
         except Exception as e:
             # st.error(f"❌ Error loading checkin: {e}") # Removed st dependency
             print(f"❌ Error loading checkin: {e}")
@@ -662,10 +677,39 @@ class CheckinLoader:
 class DetailedAttendanceAnalyzer:
     """Phân tích chi tiết chấm công từng nhân viên"""
     
-    def __init__(self, df_checkin: pd.DataFrame, df_timeoff: pd.DataFrame = None, employee_manager: EmployeeManager = None):
+    def __init__(self, df_checkin: pd.DataFrame, df_timeoff: pd.DataFrame, employee_manager=None):
         self.df_checkin = df_checkin.copy() if not df_checkin.empty else pd.DataFrame()
         self.df_timeoff = df_timeoff.copy() if df_timeoff is not None and not df_timeoff.empty else pd.DataFrame()
         self.employee_manager = employee_manager
+        
+        # Tạo mapping name -> username để tra cứu
+        self.name_to_username_map = {}
+        self.name_to_email_map = {}
+        if self.employee_manager:
+            if hasattr(self.employee_manager, 'name_to_username'):
+                 self.name_to_username_map = self.employee_manager.name_to_username
+                 print(f"DEBUG: DetailedAttendanceAnalyzer name_to_username_map size: {len(self.name_to_username_map)}")
+            
+            # Use name_to_email from employee_manager if available
+            if hasattr(self.employee_manager, 'name_to_email'):
+                self.name_to_email_map = self.employee_manager.name_to_email
+            else:
+                # Fallback: if employee_manager has users_data, build it
+                if hasattr(self.employee_manager, 'users_data') and self.employee_manager.users_data:
+                    for u in self.employee_manager.users_data:
+                        self.name_to_email_map[u.get('name', '')] = u.get('email', '')
+
+            print(f"DEBUG: Looking for 'Trần Tú' in name_to_username_map...")
+            found_key = None
+            for k in self.name_to_username_map.keys():
+                if "Trần Tú" in k:
+                    found_key = k
+                    break
+            
+            if found_key:
+                print(f"DEBUG: Found match in map: '{found_key}' -> {self.name_to_username_map[found_key]}")
+            else:
+                print("DEBUG: No variant of 'Trần Tú' found in map")
         
         # Chuẩn hóa dữ liệu
         if not self.df_checkin.empty:
@@ -988,16 +1032,43 @@ class DetailedAttendanceAnalyzer:
         return no_diacritics.lower().replace(' ', '')
     
     def _find_similar_name(self, emp_name: str) -> str:
-        """Tìm tên tương tự trong dữ liệu checkin nếu không tìm thấy chính xác"""
+        """Tìm tên tương tự trong dữ liệu checkin hoặc sử dụng username làm fallback"""
         if self.df_checkin.empty:
+            print("DEBUG: df_checkin is empty")
             return emp_name
         
-        # Kiểm tra tên chính xác trước
+        print(f"DEBUG: Searching for '{emp_name}'...")
+        if "Trần Tú" in emp_name:
+            print(f"DEBUG: All unique employee_names in df_checkin: {self.df_checkin['employee_name'].unique().tolist()}")
+        # 1. Kiểm tra tên chính xác trước
         exact_match = self.df_checkin[self.df_checkin['employee_name'] == emp_name]
         if not exact_match.empty:
             return emp_name
         
-        # Tìm tên tương tự
+        # 2. Sử dụng username/email làm fallback (đây là cách tin cậy nhất)
+        target_email = self.name_to_email_map.get(emp_name, '')
+        username = self.name_to_username_map.get(emp_name, '')
+        
+        if target_email or username:
+            email_lower = target_email.lower() if target_email else f"{username.lower()}@"
+            username_lower = username.lower() if username else email_lower.split('@')[0]
+
+            if 'email' not in self.df_checkin.columns:
+                print(f"DEBUG: 'email' column not in df_checkin! Cols: {self.df_checkin.columns.tolist()}")
+            else:
+                # Tìm theo email chính xác hoặc username
+                mask = (self.df_checkin['email'].str.lower() == email_lower) | \
+                       (self.df_checkin['email'].str.lower().str.startswith(f"{username_lower}@"))
+                
+                match_by_identity = self.df_checkin[mask]
+                if not match_by_identity.empty:
+                    found_name = match_by_identity.iloc[0]['employee_name']
+                    print(f"   ✅ Tìm thấy tên qua identity (email/user) '{username_lower}': '{found_name}' (thay vì '{emp_name}')")
+                    return found_name
+                else:
+                    print(f"DEBUG: No records found for identity '{username_lower}' / '{email_lower}'")
+
+        # 3. Tìm tên tương tự (logic cũ)
         unique_names = self.df_checkin['employee_name'].unique()
         emp_name_normalized = self._normalize_name(emp_name)
         
@@ -1007,12 +1078,12 @@ class DetailedAttendanceAnalyzer:
             if (emp_name_normalized == name_normalized or
                 emp_name_normalized in name_normalized or 
                 name_normalized in emp_name_normalized):
-                print(f"   💡 Tìm thấy tên tương tự trong checkin: '{name}' (thay vì '{emp_name}')")
+                print(f"   💡 Tìm thấy tên tương tự trong checkin (fuzzy): '{name}' (thay vì '{emp_name}')")
                 return name
         
         return emp_name
     
-    def analyze_employee_detail(self, emp_name: str, year: int, month: int) -> Dict:
+    def analyze_employee_detail(self, emp_name: str, year: int, month: int, join_date: str = None) -> Dict:
         """Phân tích chi tiết một nhân viên"""
         
         # Tìm tên tương tự nếu không tìm thấy chính xác
@@ -1033,8 +1104,14 @@ class DetailedAttendanceAnalyzer:
         # Lấy thông tin nghỉ phép (sử dụng tên gốc từ Account API)
         timeoff_info = self._get_employee_timeoff_days(emp_name, actual_working_days, year, month)
         
-        # Lấy trường 'since' (ngày vào làm) - thử cả hai tên
-        since_timestamp = self._get_since_by_employee_name(emp_name)
+        # Lấy trường 'since' (ngày vào làm)
+        since_timestamp = None
+        if join_date:
+            since_timestamp = str(join_date)
+            
+        if not since_timestamp:
+            since_timestamp = self._get_since_by_employee_name(emp_name)
+        
         if not since_timestamp:
             # Thử với tên trong checkin data
             since_timestamp = self._get_since_by_employee_name(actual_checkin_name)
@@ -1332,7 +1409,7 @@ def timestamp_to_hcm(ts):
     except:
         return 'N/A'
 
-def get_checkin_data(employee_name, year, month):
+def get_checkin_data(employee_name, year, month, join_date=None):
     """Lấy và phân tích dữ liệu checkin"""
     try:
         print(f"🔄 Đang tải dữ liệu Checkin/Timeoff cho {employee_name} ({month}/{year})...")
@@ -1362,8 +1439,10 @@ def get_checkin_data(employee_name, year, month):
         employee_manager = EmployeeManager(ACCOUNT_TOKEN)
         
         # 2. Analyze
+        print(f"DEBUG: get_checkin_data - df_checkin size: {len(df_checkin)}")
         analyzer = DetailedAttendanceAnalyzer(df_checkin, df_timeoff, employee_manager)
-        report = analyzer.analyze_employee_detail(employee_name, year, month)
+        print(f"DEBUG: analyzer created. Mapping size: {len(analyzer.name_to_username_map)}")
+        report = analyzer.analyze_employee_detail(employee_name, year, month, join_date=join_date)
         
         if not report:
             print("⚠️ Không thể tạo báo cáo chi tiết.")

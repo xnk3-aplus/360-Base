@@ -1,76 +1,75 @@
-# Base.vn 360 Data Aggregator
+# Base.vn Work Analysis System (app_v2_all)
 
-This project integrates with the **Base.vn** ecosystem to aggregate employee data from multiple applications into a comprehensive 360-degree performance report. It can be run as a standalone email reporter or as a **Model Context Protocol (MCP)** server for AI agent integration.
+Hệ thống tự động thu thập dữ liệu, phân tích hiệu suất và gửi báo cáo tổng hợp cho nhân viên sử dụng hệ sinh thái Base.vn.
 
-## 🚀 Features
+## 🚀 Tính năng chính
 
--   **Data Aggregation**: Fetches data from 5 key Base.vn modules:
-    -   **Base WeWork**: Task management, deadlines, completion rates.
-    -   **Base Goal**: OKR tracking, progress speed, weekly check-in integrity.
-    -   **Base Checkin**: Attendance, punctuality analysis (Early/Late/Standard), timesheet verification.
-    -   **Base Workflow**: Process job tracking, SLA performance.
-    -   **Base Inside**: Internal communication, post engagement, and influence impact.
--   **Intelligent Formatting**: Generates structured HTML "content boxes" mimicking professional email reports.
--   **MCP Server Integration**: Exposes a `get_base_data_by_name` tool via FastMCP, allowing LLMs to retrieve and understand employee context.
--   **Smart User Resolution**: Automatically resolves employee names (e.g., "Ngô Thị Thủy") to internal Basenames and IDs.
+- **Tích hợp đa nền tảng Base.vn**:
+  - **Base WeWork**: Theo dõi tiến độ công việc, deadline, tỷ lệ hoàn thành.
+  - **Base Goal**: Phân tích OKR, mục tiêu cá nhân và sự thay đổi theo tuần.
+  - **Base Checkin**: Đánh giá chấm công, thói quen đi làm (Early Bird/Punctual/Late).
+  - **Base Inside**: Phân tích mức độ tương tác, vai trò trong cộng đồng nội bộ.
+  - **Base Workflow**: Quản lý quy trình và nhiệm vụ.
+- **AI Analysis (Ollama)**: Sử dụng mô hình `gemini-3-flash-preview` để đưa ra nhận xét (Insights) và gợi ý hành động (Recommendations) cá nhân hóa.
+- **Email Report HTML**: Gởi báo cáo định kỳ qua email với giao diện HTML hiện đại, trực quan.
 
-## 🛠️ Installation
+## 🛠️ Yêu cầu hệ thống
 
-1.  **Clone the repository**:
-    ```bash
-    git clone https://github.com/xnk3-aplus/360-Base.git
-    cd 360-Base
-    ```
+- **Python**: 3.8+
+- **Libaries**: `requests`, `pandas`, `pydantic`, `python-dotenv`, `ollama`
+- **Ollama**: Cần cài đặt và chạy Ollama local hoặc trỏ tới server Ollama.
 
-2.  **Install dependencies**:
+## ⚙️ Cấu hình (.env)
+
+Tạo file `.env` tại thư mục gốc và điền các thông tin sau:
+
+```env
+# Base.vn API Tokens
+WEWORK_ACCESS_TOKEN=your_wework_token
+ACCOUNT_ACCESS_TOKEN=your_account_token
+GOAL_ACCESS_TOKEN=your_goal_token
+
+# Email Configuration (Gmail SMTP)
+EMAIL_GUI=your_email@gmail.com
+MAT_KHAU=your_app_password
+
+# AI Configuration (Ollama)
+OLLAMA_API_KEY=your_ollama_key
+# Backup keys (optional)
+OLLAMA_API_KEY_BACKUP_1=backup_key_1
+OLLAMA_API_KEY_BACKUP_2=backup_key_2
+```
+
+## 📦 Cài đặt
+
+1.  Clone repo về máy.
+2.  Cài đặt các thư viện cần thiết:
     ```bash
     pip install -r requirements.txt
     ```
+    _(Nếu chưa có `requirements.txt`, cài thủ công: `pip install requests pandas pydantic python-dotenv ollama pytz`)_
 
-3.  **Configuration**:
-    Create a `.env` file in the root directory (copied from the example below) and populate it with your Base.vn API access tokens. **Note: The `.env` file is ignored by git for security.**
+## ▶️ Sử dụng
 
-    ```ini
-    # .env example
-    ACCOUNT_ACCESS_TOKEN=your_account_token
-    WEWORK_ACCESS_TOKEN=your_wework_token
-    WORKFLOW_ACCESS_TOKEN=your_workflow_token
-    GOAL_ACCESS_TOKEN=your_goal_token
-    INSIDE_API_KEY=your_inside_token
-    CHECKIN_TOKEN=your_checkin_token
-    TIMEOFF_TOKEN=your_timeoff_token
-    ```
-
-## 💻 Usage
-
-### 1. Run as MCP Server (Recommended)
-This starts a FastMCP server that exposes the data tools to an MCP client (like Claude Desktop or an AI Agent).
+Chạy script chính để gửi báo cáo cho một hoặc toàn bộ nhân viên:
 
 ```bash
-python server.py
+python app_v2_all.py
 ```
 
--   **Tool**: `get_base_data_by_name(name: str)`
--   **Output**: JSON object containing user info and pre-formatted HTML content blocks for each platform.
+**Lưu ý**: Script mặc định sẽ quét danh sách nhân viên từ nhóm quy định (ví dụ: `nvvanphong`) và gửi email báo cáo nếu có dữ liệu hoạt động trong 1 tháng gần nhất.
 
-### 2. Run as Standalone Reporter
-You can run the core logic directly to generate a report for a specific employee (configurable in `app.py`).
+## 📂 Cấu trúc dự án
 
-```bash
-python app.py
-```
+- `app_v2_all.py`: Script chính (Main orchestrator).
+- `checkin_timeoff.py`: Module xử lý dữ liệu chấm công.
+- `wework.py`: Module xử lý dữ liệu công việc.
+- `goal.py`: Module xử lý dữ liệu OKR.
+- `inside.py`: Module xử lý dữ liệu truyền thông nội bộ.
+- `workflow.py`: Module xử lý quy trình.
+- `app_v2_logic.py`: Logic xử lý và tổng hợp dữ liệu bổ sung.
 
-## 📂 Project Structure
+---
 
--   `server.py`: Main MCP server entry point. Defines tools and handles requests.
--   `base_formatter.py`: Logic for formatting raw API data into beautiful HTML content boxes.
--   `app.py`: Legacy standalone application and testing utility.
--   **Modules**:
-    -   `checkin_timeoff.py`: Handles attendance & time-off logic.
-    -   `wework.py`: Project & task logic.
-    -   `goal.py`: OKR logic.
-    -   `workflow.py`: Process management logic.
-    -   `inside.py`: Internal social network logic.
-
-## 🔒 Security Note
-This project handles sensitive employee data. Ensure your `.env` file is never committed to version control. The included `.gitignore` is pre-configured to exclude it.
+**Author**: [Your Name/Team]
+**Phiên bản**: 2.0

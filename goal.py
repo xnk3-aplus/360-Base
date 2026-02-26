@@ -9,6 +9,7 @@ from typing import Dict, List, Optional, Tuple, Any
 from collections import defaultdict
 import pytz
 import calendar
+import ollama
 
 # Configuration
 warnings.filterwarnings('ignore')
@@ -25,18 +26,53 @@ MAX_PAGES_KRS = 50
 MAX_PAGES_CHECKINS = 100
 
 # Access Tokens
-GOAL_ACCESS_TOKEN = os.getenv('GOAL_ACCESS_TOKEN')
-ACCOUNT_ACCESS_TOKEN = os.getenv('ACCOUNT_ACCESS_TOKEN')
+GOAL_ACCESS_TOKEN = '5654~hCB7RnBKitN8QX05KXRzLNZ7QK2mOp9z2CdVE7d3pqfDybfJooMUR8gwitEcTjegb7P7-03-Wu1DCDGg3zgg1a0sPyldlgcPHgE1xyjoxTHLi4UsYtBKHnS_X6GHQlr1kTM0YaOSaOpulDhFtxODjg'
+ACCOUNT_ACCESS_TOKEN = '5654~1NivIHKOvJ3oXRDuNDIp8Q3FTUWZQyVJauBRmW0QFi9TrG5C3b5e-HKeYdqnstzWuedgz6OYQFQevkeRCkEQ0poisrM3zzIWllbp_Bvs2HyrWzed5hlMH5grj2H6cpZPsyQx5mlxjtcJxqRVMef4G8_ct9TKiFb86NtCFUzD9Eo'
 
 hcm_tz = pytz.timezone('Asia/Ho_Chi_Minh')
 user_id_to_name_map = {}
+
+# Department and Team ID Mappings
+DEPT_ID_MAPPING = {
+    "450": "BP Thị Trường",
+    "451": "BP Cung Ứng",
+    "452": "BP Nhân Sự Hành Chính",
+    "453": "BP Tài Chính Kế Toán",
+    "542": "Khối hiện trường (các vùng miền)",
+    "651": "Ban Giám Đốc",
+    "652": "BP R&D, Business Line mới"
+}
+
+TEAM_ID_MAPPING = {
+    "307": "Đội Bán hàng - Chăm sóc khách hàng",
+    "547": "Đội Nguồn Nhân Lực",
+    "548": "Đội Kế toán - Quản trị",
+    "1032": "Team Hoàn Thuế VAT (Nhóm)",
+    "1128": "Đội Thanh Hóa (Miền Bắc)",
+    "1129": "Đội Quy Nhơn",
+    "1133": "Đội Hành chính - Số hóa",
+    "1134": "Team Thực tập sinh - Thử nghiệm mới (Nhóm)",
+    "1138": "Đội Marketing - AI",
+    "1141": "Đội Tài chính - Đầu tư",
+    "1148": "Đội Logistic quốc tế - Thị trường",
+    "546": "Đội Mua hàng - Out source",
+    "1130": "Đội Daknong",
+    "1131": "Đội KCS VT-SG",
+    "1135": "Đội Chuỗi cung ứng nội địa - Thủ tục XNK",
+    "1132": "Đội Văn hóa - Chuyển hóa",
+    "1136": "Đội Chất lượng - Sản phẩm",
+    "1137": "Team 1 (Nhóm 1)",
+    "1139": "Đội Data - Hệ thống - Số hóa",
+    "1375": "AGILE _ DỰ ÁN 1"
+}
+
 
 def load_user_mapping():
     """Tải mapping user_id -> name từ API Account"""
     global user_id_to_name_map
     try:
         url = "https://account.base.vn/extapi/v1/users"
-        payload = {'access_token': ACCOUNT_ACCESS_TOKEN}
+        payload = {'access_token_v2': ACCOUNT_ACCESS_TOKEN}
         headers = {}
         
         response = requests.post(url, headers=headers, data=payload, timeout=30)
@@ -79,7 +115,7 @@ class DateUtils:
         monday_current_week = today - timedelta(days=days_to_monday_current_week)
         monday_previous_week = monday_current_week - timedelta(days=7)
         friday_previous_week = monday_previous_week + timedelta(days=4)
-        return friday_previous_week
+        return friday_previous_week.replace(hour=23, minute=59, second=59)
 
     @staticmethod
     def get_quarter_start_date() -> datetime:
@@ -114,8 +150,19 @@ class DateUtils:
 
     @staticmethod
     def should_calculate_monthly_shift() -> bool:
-        """Check if monthly shift should be calculated (not in months 1,4,7,10)"""
-        return datetime.now().month not in QUARTER_START_MONTHS
+        """
+        Check if monthly shift should be calculated
+        - Không phải tháng đầu quý (1,4,7,10) HOẶC
+        - Là tuần 4 hoặc 5 của tháng đầu quý
+        """
+        current_month = datetime.now().month
+        
+        # Nếu không phải tháng đầu quý thì tính bình thường
+        if current_month not in QUARTER_START_MONTHS:
+            return True
+        
+        # Nếu là tháng đầu quý, chỉ tính khi là tuần 4 hoặc 5
+        return DateUtils.is_week_4_or_5_of_quarter_start_month()
     
     @staticmethod
     def is_last_week_of_month() -> bool:
@@ -130,12 +177,44 @@ class DateUtils:
         return last_week['start_date'] <= now.date() <= last_week['end_date']
     
     @staticmethod
+    def is_week_4_or_5_of_quarter_start_month() -> bool:
+        """
+        Kiểm tra xem hiện tại có phải tuần 4 hoặc 5 của tháng đầu quý không
+        """
+        now = datetime.now()
+        current_month = now.month
+        
+        # Kiểm tra xem có phải tháng đầu quý không (1, 4, 7, 10)
+        if current_month not in QUARTER_START_MONTHS:
+            return False
+        
+        # Lấy danh sách các tuần trong tháng hiện tại
+        weeks = DateUtils._get_weeks_in_current_month()
+        
+        if not weeks:
+            return False
+        
+        # Tìm tuần hiện tại
+        current_week_number = None
+        for week in weeks:
+            if week['start_date'] <= now.date() <= week['end_date']:
+                current_week_number = week['week_number']
+                break
+        
+        # Kiểm tra xem có phải tuần 4 hoặc 5 không
+        return current_week_number in [4, 5]
+
+    @staticmethod
     def _get_weeks_in_current_month():
-        """Get all weeks in current month"""
+        """
+        Lấy tất cả các tuần trong tháng hiện tại
+        Quy tắc: Nếu ngày đầu/cuối tháng rơi vào thứ 2-6, vẫn tính là tuần của tháng đó
+        """
         now = datetime.now()
         year = now.year
         month = now.month
         
+        # Ngày đầu và cuối tháng
         first_day = datetime(year, month, 1)
         last_day = datetime(year, month, calendar.monthrange(year, month)[1])
         
@@ -143,11 +222,13 @@ class DateUtils:
         current_date = first_day
         
         while current_date <= last_day:
+            # Tìm ngày thứ 2 của tuần (hoặc ngày đầu tháng nếu tuần bắt đầu trước đó)
             week_start = current_date - timedelta(days=current_date.weekday())
-            week_start = max(week_start, first_day)
+            week_start = max(week_start, first_day)  # Không được trước ngày 1
             
+            # Tìm ngày chủ nhật của tuần (hoặc ngày cuối tháng nếu tuần kết thúc sau đó)
             week_end = week_start + timedelta(days=6)
-            week_end = min(week_end, last_day)
+            week_end = min(week_end, last_day)  # Không được sau ngày cuối tháng
             
             weeks.append({
                 'week_number': len(weeks) + 1,
@@ -156,6 +237,7 @@ class DateUtils:
                 'week_range': f"{week_start.strftime('%d/%m')} - {week_end.strftime('%d/%m')}"
             })
             
+            # Chuyển sang tuần tiếp theo
             current_date = week_end + timedelta(days=1)
         
         return weeks
@@ -355,7 +437,7 @@ class UserManager:
                 'checkin_dates': checkin_dates
             })
         
-        meets_criteria = weeks_with_checkins >= 2
+        meets_criteria = total_checkins > 3
         
         return {
             'meets_criteria': meets_criteria,
@@ -440,19 +522,28 @@ class GoalAPIClient:
         self.account_token = account_token
 
     def _make_request(self, url: str, data: Dict, description: str = "") -> requests.Response:
-        """Make HTTP request with error handling"""
-        try:
-            response = requests.post(url, data=data, timeout=REQUEST_TIMEOUT)
-            response.raise_for_status()
-            return response
-        except requests.exceptions.RequestException as e:
-            print(f"Error {description}: {e}")
-            raise
+        """Make HTTP request with error handling and retry logic"""
+        max_retries = 3
+        backoff_factor = 1  # seconds
+
+        for attempt in range(max_retries + 1):
+            try:
+                response = requests.post(url, data=data, timeout=REQUEST_TIMEOUT)
+                response.raise_for_status()
+                return response
+            except requests.exceptions.RequestException as e:
+                if attempt < max_retries:
+                    wait_time = backoff_factor * (2 ** attempt)
+                    print(f"⚠️ Error {description}: {e}. Retrying in {wait_time}s ({attempt + 1}/{max_retries})...")
+                    time.sleep(wait_time)
+                else:
+                    print(f"❌ Failed {description} after {max_retries + 1} attempts: {e}")
+                    raise
 
     def get_filtered_members(self) -> pd.DataFrame:
         """Get filtered members from account API"""
         url = "https://account.base.vn/extapi/v1/group/get"
-        data = {"access_token": self.account_token, "path": "aplus"}
+        data = {'access_token_v2': self.account_token, "path": "nvvanphong"}
         
         response = self._make_request(url, data, "fetching account members")
         response_data = response.json()
@@ -465,25 +556,18 @@ class GoalAPIClient:
                 'name': m.get('name', ''),
                 'username': m.get('username', ''),
                 'job': m.get('title', ''),
-                'email': m.get('email', '')
+                'email': m.get('email', ''),
+                'since': m.get('since', '')
             }
             for m in members
         ])
         
-        return self._apply_member_filters(df)
-
-    def _apply_member_filters(self, df: pd.DataFrame) -> pd.DataFrame:
-        """Apply filters to member dataframe"""
-        excluded_jobs = 'kcs|agile|khu vực|sa ti co|trainer|specialist|no|chuyên gia|xnk|vat|trưởng phòng thị trường'
-        filtered_df = df[~df['job'].str.lower().str.contains(excluded_jobs, na=False)]
-        filtered_df = filtered_df[filtered_df['username'] != 'ThuAn']
-        filtered_df = filtered_df[filtered_df['username'] != 'HienNguyen']
-        return filtered_df
+        return df
 
     def get_cycle_list(self) -> List[Dict]:
         """Get list of quarterly cycles"""
         url = "https://goal.base.vn/extapi/v1/cycle/list"
-        data = {'access_token': self.goal_token}
+        data = {'access_token_v2': self.goal_token}
 
         response = self._make_request(url, data, "fetching cycle list")
         data = response.json()
@@ -508,7 +592,7 @@ class GoalAPIClient:
     def get_account_users(self) -> pd.DataFrame:
         """Get users from Account API"""
         url = "https://account.base.vn/extapi/v1/users"
-        data = {"access_token": self.account_token}
+        data = {'access_token_v2': self.account_token}
 
         response = self._make_request(url, data, "fetching account users")
         json_response = response.json()
@@ -523,24 +607,71 @@ class GoalAPIClient:
             'username': user['username']
         } for user in account_users])
 
+    def get_target_sub_goal_ids(self, target_id: str) -> List[str]:
+        """Fetch sub-goal IDs for a specific target"""
+        url = "https://goal.base.vn/extapi/v1/target/get"
+        data = {'access_token_v2': self.goal_token, 'id': str(target_id)}
+        
+        try:
+            # Removed separate print to reduce noise, handled in loop or debug if needed
+            response = requests.post(url, data=data, timeout=REQUEST_TIMEOUT)
+            if response.status_code == 200:
+                response_data = response.json()
+                if response_data and 'target' in response_data and response_data['target']:
+                    cached_objs = response_data['target'].get('cached_objs', [])
+                    if isinstance(cached_objs, list):
+                        return [str(item.get('id')) for item in cached_objs if 'id' in item]
+            return []
+        except Exception as e:
+            print(f"Error fetching sub-goal {target_id}: {e}")
+            return []
+
     def get_goals_data(self, cycle_path: str) -> pd.DataFrame:
         """Get goals data from API"""
         url = "https://goal.base.vn/extapi/v1/cycle/get.full"
-        data = {'access_token': self.goal_token, 'path': cycle_path}
+        data = {'access_token_v2': self.goal_token, 'path': cycle_path}
 
         response = self._make_request(url, data, "fetching goals data")
         data = response.json()
 
+        # Helper function to extract form values
+        def extract_form_value(form_array, field_name):
+            """Extract value from form array by field name"""
+            if not form_array or not isinstance(form_array, list):
+                return ""
+            for item in form_array:
+                if item.get('name') == field_name:
+                    return item.get('value', item.get('display', ""))
+            return ""
+
         goals_data = []
         for goal in data.get('goals', []):
+            form_data = goal.get('form', [])
+            dept_id = str(goal.get('dept_id', '0'))
+            team_id = str(goal.get('team_id', '0'))
+            
+            # Map dept_id and team_id to names (empty if ID is 0)
+            # Handle both string "0" and actual 0 value
+            dept_name = "" if (dept_id == "0" or dept_id == 0 or not dept_id) else DEPT_ID_MAPPING.get(dept_id, "")
+            team_name = "" if (team_id == "0" or team_id == 0 or not team_id) else TEAM_ID_MAPPING.get(team_id, "")
+            
             goals_data.append({
-                'goal_id': goal.get('id'),
+                'goal_id': str(goal.get('id')),
                 'goal_name': goal.get('name', 'Unknown Goal'),
                 'goal_content': goal.get('content', ''),
                 'goal_since': DateUtils.convert_timestamp_to_datetime(goal.get('since')),
                 'goal_current_value': goal.get('current_value', 0),
                 'goal_user_id': str(goal.get('user_id', '')),
                 'goal_target_id': str(goal.get('target_id', '')) if goal.get('target_id') else '',
+                # Extract dept_id and team_id from goal
+                'dept_id': dept_id,
+                'team_id': team_id,
+                'dept_name': dept_name,
+                'team_name': team_name,
+                # Extract 3 form fields
+                'Mức độ đóng góp vào mục tiêu công ty': extract_form_value(form_data, 'Mức độ đóng góp vào mục tiêu công ty'),
+                'Mức độ ưu tiên mục tiêu của Quý': extract_form_value(form_data, 'Mức độ ưu tiên mục tiêu của Quý'),
+                'Tính khó/tầm ảnh hưởng đến hệ thống': extract_form_value(form_data, 'Tính khó/tầm ảnh hưởng đến hệ thống'),
             })
 
         return pd.DataFrame(goals_data)
@@ -548,7 +679,7 @@ class GoalAPIClient:
     def parse_targets_data(self, cycle_path: str) -> pd.DataFrame:
         """Parse targets data from API to create target mapping"""
         url = "https://goal.base.vn/extapi/v1/cycle/get.full"
-        data = {'access_token': self.goal_token, 'path': cycle_path}
+        data = {'access_token_v2': self.goal_token, 'path': cycle_path}
 
         response = self._make_request(url, data, "fetching targets data")
         response_data = response.json()
@@ -557,38 +688,116 @@ class GoalAPIClient:
             return pd.DataFrame()
         
         all_targets = []
+        raw_targets = response_data.get('targets', [])
         
-        # Iterate over each main "Objective" (Company Target)
-        for objective in response_data.get('targets', []):
-            objective_id = objective.get('id')
-            objective_name = objective.get('name')
+        # 1. Map Company Targets (Top Level scope='company')
+        company_targets_map = {}
+        for t in raw_targets:
+            if t.get('scope') == 'company':
+                company_targets_map[str(t.get('id', ''))] = {
+                    'id': str(t.get('id', '')),
+                    'name': t.get('name', '')
+                }
+        
+        # Helper to extract form data matching server.py logic
+        def extract_form_data(target_obj):
+            # strict columns requested by user
+            form_data = {
+                "Mức độ đóng góp vào mục tiêu công ty": "",
+                "Mức độ ưu tiên mục tiêu của Quý": "",
+                "Tính khó/tầm ảnh hưởng đến hệ thống": ""
+            }
+            if 'form' in target_obj and isinstance(target_obj['form'], list):
+                for item in target_obj['form']:
+                    key = item.get('name')
+                    val = item.get('value')
+                    if key:
+                        form_data[key] = val
+            return form_data
+
+        # 2. Iterate ALL targets to find relevant ones (including detached Dept/Team targets)
+        # We will collect valid targets first
+        collected_targets = []
+        
+        for t in raw_targets:
+            t_id = str(t.get('id', ''))
+            scope = t.get('scope', '')
+            parent_id = str(t.get('parent_id') or '')
             
-            # Ensure the objective has Key Results (cached_objs)
-            if 'cached_objs' in objective and isinstance(objective['cached_objs'], list):
-                # Iterate over each "Key Result" (sub-target)
-                for kr in objective['cached_objs']:
-                    target_data = {
-                        'target_id': str(kr.get('id', '')),
-                        'target_company_id': str(objective_id) if objective_id else '',
-                        'target_company_name': objective_name if objective_name else '',
-                        'target_name': kr.get('name', ''),
-                        'target_scope': kr.get('scope', ''),
-                        'target_dept_id': None,
-                        'target_dept_name': None,
-                        'target_team_id': None,
-                        'target_team_name': None
-                    }
-                    
-                    # Điền dữ liệu cho cột dept/team dựa trên scope
-                    if target_data['target_scope'] == 'dept':
-                        target_data['target_dept_id'] = target_data['target_id']
-                        target_data['target_dept_name'] = target_data['target_name']
-                    elif target_data['target_scope'] == 'team':
-                        target_data['target_team_id'] = target_data['target_id']
-                        target_data['target_team_name'] = target_data['target_name']
-                    
-                    all_targets.append(target_data)
+        # 2. Iterate ALL targets to find relevant ones
+        # We use a dictionary to ensure uniqueness and maximize coverage
+        targets_map = {}
         
+        for t in raw_targets:
+            t_id = str(t.get('id', ''))
+            scope = t.get('scope', '')
+            parent_id = str(t.get('parent_id') or '')
+            
+            # Common extraction logic
+            def create_base_data(obj, parent_info=None):
+                data = {
+                    'target_id': str(obj.get('id', '')),
+                    'target_name': obj.get('name', ''),
+                    'target_scope': obj.get('scope', ''),
+                    'target_company_id': parent_info['id'] if parent_info else None,
+                    'target_company_name': parent_info['name'] if parent_info else None,
+                    'target_dept_id': None, 'target_dept_name': None,
+                    'target_team_id': None, 'target_team_name': None,
+                    'team_id': str(obj.get('team_id', '')),
+                    'dept_id': str(obj.get('dept_id', ''))
+                }
+                data.update(extract_form_data(obj))
+                return data
+
+            # Case A: Detached Dept/Team Target linked to Company Parent
+            if scope in ['dept', 'team'] and parent_id in company_targets_map:
+                parent = company_targets_map[parent_id]
+                target_data = create_base_data(t, parent)
+                targets_map[t_id] = target_data
+
+            # Case B: Company Target (inspect its cached_objs)
+            elif scope == 'company':
+                # Also add the company target itself if not present
+                if t_id not in targets_map:
+                     targets_map[t_id] = create_base_data(t, {'id': t_id, 'name': t.get('name', '')})
+
+                # Process cached_objs
+                if 'cached_objs' in t and isinstance(t['cached_objs'], list):
+                    for kr in t['cached_objs']:
+                        kr_id = str(kr.get('id', ''))
+                        parent_info = {'id': t_id, 'name': t.get('name', '')}
+                        sub_data = create_base_data(kr, parent_info)
+                        targets_map[kr_id] = sub_data
+            
+            # Case C: Catch-all for any other target not processed yet
+            elif t_id not in targets_map:
+                # Try to resolve parent name if possible
+                parent_info = None
+                if parent_id and parent_id in company_targets_map:
+                    parent_info = company_targets_map[parent_id]
+                
+                target_data = create_base_data(t, parent_info)
+                targets_map[t_id] = target_data
+        
+        collected_targets = list(targets_map.values())
+
+        # 3. Post-process: Fill columns and fetch sub-goals
+        for target_data in collected_targets:
+            # Fill specific columns based on scope
+            if target_data['target_scope'] == 'dept':
+                target_data['target_dept_id'] = target_data['target_id']
+                target_data['target_dept_name'] = target_data['target_name']
+            elif target_data['target_scope'] == 'team':
+                target_data['target_team_id'] = target_data['target_id']
+                target_data['target_team_name'] = target_data['target_name']
+            
+            # Fetch sub-goal IDs (Original logic preserved)
+            print(f"  Fetching sub-goals for target: {target_data['target_name']}...", end='\r')
+            target_data['list_goal_id'] = self.get_target_sub_goal_ids(target_data['target_id'])
+            
+            all_targets.append(target_data)
+        
+        print("\nFinished fetching all targets.")
         return pd.DataFrame(all_targets)
 
     def get_krs_data(self, cycle_path: str) -> pd.DataFrame:
@@ -597,7 +806,7 @@ class GoalAPIClient:
         all_krs = []
         
         for page in range(1, MAX_PAGES_KRS + 1):
-            data = {"access_token": self.goal_token, "path": cycle_path, "page": page}
+            data = {'access_token_v2': self.goal_token, "path": cycle_path, "page": page}
 
             response = self._make_request(url, data, f"loading KRs at page {page}")
             response_data = response.json()
@@ -628,7 +837,7 @@ class GoalAPIClient:
         all_checkins = []
         
         for page in range(1, MAX_PAGES_CHECKINS + 1):
-            data = {"access_token": self.goal_token, "path": cycle_path, "page": page}
+            data = {'access_token_v2': self.goal_token, "path": cycle_path, "page": page}
 
             response = self._make_request(url, data, f"loading checkins at page {page}")
             response_data = response.json()
@@ -646,6 +855,66 @@ class GoalAPIClient:
                 break
 
         return all_checkins
+
+
+class AIActionEvaluator:
+    """Evaluates 'Next Action' content using AI"""
+    
+    @staticmethod
+    def evaluate_action(action_content: str) -> int:
+        """
+        Evaluate the quality of the 'Next Action' content.
+        
+        Criteria:
+        - +1: No clear action / Vague / Empty
+        - +3: Status report only (doing, trying...)
+        - +5: Clear action + Specific solution / Concrete plan
+        """
+        # TẠM THỜI KHÓA: Return 0 luôn để không gọi AI
+        return 0
+
+        # Nếu không có nội dung hoặc quá ngắn (dưới 5 ký tự) -> 0 điểm, không gọi AI
+        if not action_content or len(action_content.strip()) < 5:
+            return 0
+            
+        try:
+            prompt = f"""
+            Bạn là một trợ lý AI đánh giá chất lượng của nội dung "Công việc tiếp theo" trong báo cáo check-in.
+            
+            Nội dung cần đánh giá: "{action_content}"
+            
+            Hãy đánh giá dựa trên tiêu chí sau và CHỈ TRẢ VỀ MỘT CON SỐ (1, 3, hoặc 5):
+            - 1: Không có hành động rõ ràng, quá ngắn gọn, hoặc vô nghĩa.
+            - 3: Chỉ báo cáo trạng thái (đang làm, đang cố gắng, vẫn thế...) mà không có giải pháp cụ thể.
+            - 5: Có hành động rõ ràng, cụ thể, và hướng giải quyết/kế hoạch chi tiết.
+            
+            Output chỉ là số:
+            """
+            
+            response = ollama.generate(
+                model='gemini-3-flash-preview:cloud',
+                prompt=prompt
+            )
+            
+            result_text = response['response'].strip()
+            
+            # Extract number from response (handling potential extra text)
+            import re
+            match = re.search(r'\b(1|3|5)\b', result_text)
+            if match:
+                return int(match.group(1))
+            
+            # Fallback simple check if regex fails but simple number exists
+            if '5' in result_text: return 5
+            if '3' in result_text: return 3
+            if '1' in result_text: return 1
+            
+            return 1 # Default fallback
+            
+        except Exception as e:
+            print(f"AI Eval Error: {e}")
+            return 1 # Fallback on error
+
 
 
 class DataProcessor:
@@ -681,12 +950,20 @@ class DataProcessor:
                     'checkin_target_name': target_name,
                     'checkin_kr_current_value': current_value,
                     'kr_id': kr_id,
-                    'checkin_user_id': user_id
+                    'checkin_user_id': user_id,
+                    'next_action_score': AIActionEvaluator.evaluate_action(form_value)
                 })
                 
             except Exception as e:
                 print(f"Warning: Error processing checkin {checkin.get('id', 'Unknown')}: {e}")
                 continue
+
+        if not checkin_list:
+            return pd.DataFrame(columns=[
+                'checkin_id', 'checkin_name', 'checkin_since', 'checkin_since_timestamp',
+                'cong_viec_tiep_theo', 'checkin_target_name', 'checkin_kr_current_value',
+                'kr_id', 'checkin_user_id', 'next_action_score'
+            ])
 
         return pd.DataFrame(checkin_list)
 
@@ -711,11 +988,15 @@ class DataProcessor:
         try:
             df['kr_current_value'] = pd.to_numeric(df['kr_current_value'], errors='coerce').fillna(0.00)
             df['checkin_kr_current_value'] = pd.to_numeric(df['checkin_kr_current_value'], errors='coerce').fillna(0.00)
+            
+            # Fill NaN next_action_score with 0 (no checkin or failed eval)
+            if 'next_action_score' in df.columns:
+                df['next_action_score'] = pd.to_numeric(df['next_action_score'], errors='coerce').fillna(0).astype(int)
 
             df['kr_since'] = df['kr_since'].fillna(df['goal_since'])
             df['checkin_since'] = df['checkin_since'].fillna(df['kr_since'])
 
-            columns_to_drop = ['goal_user_id', 'kr_user_id']
+            columns_to_drop = ['kr_user_id']
             existing_columns_to_drop = [col for col in columns_to_drop if col in df.columns]
             if existing_columns_to_drop:
                 df = df.drop(columns=existing_columns_to_drop)
@@ -817,6 +1098,50 @@ class OKRCalculator:
             print(f"Error calculating reference value: {e}")
             return 0, []
 
+    @staticmethod
+    def calculate_kr_shift(row: pd.Series, reference_date: datetime, final_df: pd.DataFrame) -> float:
+        """Calculate shift for a single KR"""
+        try:
+            # Lấy thông tin KR
+            kr_id = row['kr_id']
+            current_val = pd.to_numeric(row.get('kr_current_value'), errors='coerce')
+            current_val = current_val if not pd.isna(current_val) else 0.0
+
+            if not kr_id:
+                return current_val
+
+            quarter_start = DateUtils.get_quarter_start_date()
+
+            # Lấy lịch sử checkin từ final_df của toàn hệ thống
+            # Cần lọc đúng KR đang xét
+            kr_history = final_df[final_df['kr_id'] == kr_id].copy()
+            if kr_history.empty:
+                 return current_val
+
+            kr_history['checkin_since_dt'] = pd.to_datetime(kr_history['checkin_since'], errors='coerce')
+
+            # Lọc checkin trước ngày mốc VÀ sau đầu quý
+            valid_checkins = kr_history[
+                (kr_history['checkin_since_dt'] <= reference_date) & 
+                (kr_history['checkin_since_dt'] >= quarter_start) &
+                (kr_history['checkin_name'].notna()) & 
+                (kr_history['checkin_name'] != '')
+            ]
+
+            reference_val = 0.0
+            if not valid_checkins.empty:
+                # Lấy checkin mới nhất trước mốc thời gian
+                latest_checkin = valid_checkins.sort_values('checkin_since_dt').iloc[-1]
+                val = pd.to_numeric(latest_checkin.get('checkin_kr_current_value'), errors='coerce')
+                reference_val = val if not pd.isna(val) else 0.0
+            
+            # Shift = Giá trị hiện tại - Giá trị tại mốc
+            return current_val - reference_val
+
+        except Exception as e:
+            # print(f"Error calculating individual KR shift: {e}")
+            return 0.0
+
 class OKRAnalysisSystem:
     """Main system for OKR analysis"""
     
@@ -825,7 +1150,9 @@ class OKRAnalysisSystem:
         self.checkin_path = None
         self.final_df = None
         self.user_manager = None
-        self.target_df = None 
+        self.target_df = None
+        self.okr_calculator = OKRCalculator()
+        self.data_processor = DataProcessor() 
 
     def get_cycle_list(self) -> List[Dict]:
         return self.api_client.get_cycle_list()
@@ -852,15 +1179,18 @@ class OKRAnalysisSystem:
         print("2. Merging data...")
         if goals_df.empty or krs_df.empty:
             print("No goals or KRs data found")
-            return None
-
         # Merge Goals and KRs
-        merged_df = pd.merge(goals_df, krs_df, on='goal_id', how='right', suffixes=('_goal', '_kr'))
+        merged_df = pd.merge(goals_df, krs_df, on='goal_id', how='left', suffixes=('_goal', '_kr'))
         
-        # Map user names
-        if not account_df.empty and 'id' in account_df.columns:
-            id_to_name = dict(zip(account_df['id'].astype(str), account_df['name']))
-            id_to_username = dict(zip(account_df['id'].astype(str), account_df['username']))
+        # Ensure kr_id exists (user request: leave empty if no KR)
+        if 'kr_id' not in merged_df.columns:
+            merged_df['kr_id'] = None
+        
+        # Map user names using ALL users in system
+        all_users_df = self.api_client.get_account_users()
+        if not all_users_df.empty and 'id' in all_users_df.columns:
+            id_to_name = dict(zip(all_users_df['id'].astype(str), all_users_df['name']))
+            id_to_username = dict(zip(all_users_df['id'].astype(str), all_users_df['username']))
             merged_df['goal_user_name'] = merged_df['goal_user_id'].map(id_to_name)
             merged_df['goal_username'] = merged_df['goal_user_id'].map(id_to_username)
         else:
@@ -875,14 +1205,71 @@ class OKRAnalysisSystem:
         
         # Merge with Targets (Alignment Info)
         if not self.target_df.empty:
-            # Merge dựa trên kr_id = target_id
+            # 1. Merge chính: dựa trên kr_id = target_id
             self.final_df = pd.merge(self.final_df, self.target_df, 
                                    left_on='kr_id', right_on='target_id', 
                                    how='left', suffixes=('', '_target'))
+                                   
+            # 2. Merge bổ sung: dựa trên goal_id nằm trong list_goal_id của target
+            if 'list_goal_id' in self.target_df.columns:
+                print("  Performing secondary merge using sub-goal IDs...")
+                # Tạo mapping từ goal_id -> target info
+                # Explode list_goal_id để mỗi goal_id có 1 dòng tương ứng với target cha
+                target_expanded = self.target_df.explode('list_goal_id').copy()
+                target_expanded['list_goal_id'] = target_expanded['list_goal_id'].astype(str)
+                target_expanded = target_expanded.dropna(subset=['list_goal_id'])
+                
+                # Các cột thông tin target cần fill
+                target_cols = [col for col in self.target_df.columns if col not in ['list_goal_id']]
+                
+                # Tạo lookup df
+                lookup_df = target_expanded[['list_goal_id'] + target_cols].rename(columns={'list_goal_id': 'goal_id_ref'})
+                
+                # Loại bỏ duplicates nếu 1 goal thuộc nhiều target (lấy cái đầu tiên)
+                lookup_df = lookup_df.drop_duplicates(subset=['goal_id_ref'])
+                
+                # Merge tạm để lấy thông tin
+                self.final_df['goal_id'] = self.final_df['goal_id'].astype(str)
+                temp_merge = pd.merge(self.final_df, lookup_df, 
+                                    left_on='goal_id', right_on='goal_id_ref', 
+                                    how='left', suffixes=('', '_mapped'))
+                
+                # Fill dữ liệu còn thiếu
+                for col in target_cols:
+                    col_mapped = f"{col}_mapped"
+                    if col in self.final_df.columns and col_mapped in temp_merge.columns:
+                        self.final_df[col] = self.final_df[col].fillna(temp_merge[col_mapped])
+                    elif col not in self.final_df.columns and col_mapped in temp_merge.columns:
+                        self.final_df[col] = temp_merge[col_mapped]
+
         else:
             # Thêm cột trống nếu không có target data
             for col in ['target_company_name', 'target_dept_name', 'target_team_name']:
                 self.final_df[col] = None
+        
+        # User constraint: Ensure these columns ALWAYS exist and are never NULL
+        required_non_null_cols = [
+            "Mức độ đóng góp vào mục tiêu công ty",
+            "Mức độ ưu tiên mục tiêu của Quý",
+            "Tính khó/tầm ảnh hưởng đến hệ thống",
+            "team_id",
+            "dept_id",
+            "dept_name",
+            "team_name"
+        ]
+        
+        for col in required_non_null_cols:
+            if col not in self.final_df.columns:
+                self.final_df[col] = ""
+            else:
+                self.final_df[col] = self.final_df[col].fillna("")
+        
+        # Remove duplicate columns with _target suffix (keep only goal-level form fields)
+        cols_to_drop = [col for col in self.final_df.columns if col.endswith('_target') and 
+                       any(form_field in col for form_field in required_non_null_cols)]
+        if cols_to_drop:
+            print(f"  Dropping duplicate target columns: {len(cols_to_drop)} columns")
+            self.final_df = self.final_df.drop(columns=cols_to_drop)
 
         self.final_df = DataProcessor.clean_final_data(self.final_df)
         
@@ -947,68 +1334,172 @@ class OKRAnalysisSystem:
 
         return no_goals, no_checkins, goals_no_checkins
 
-    def calculate_okr_shifts_by_user(self) -> List[Dict]:
-        """Calculate weekly OKR shifts for all users"""
-        if self.final_df is None or self.final_df.empty:
-            return []
 
-        last_friday = DateUtils.get_last_friday_date()
-        date_str = last_friday.strftime('%d/%m/%Y')
-        print(f"Calculating shift vs {date_str}...")
-
-        user_shifts = []
-        grouped = self.final_df.groupby('goal_user_name')
-
-        for user_name, group in grouped:
-            if pd.isna(user_name): continue
-
-            # Current Value
-            current_value = OKRCalculator.calculate_current_value(group)
-            
-            # Reference Value (Last Friday)
-            last_friday_value, kr_details = OKRCalculator.calculate_reference_value(last_friday, group)
-            
-            # Shift
-            shift = current_value - last_friday_value
-
-            user_shifts.append({
-                'user_name': user_name,
-                'current_value': round(current_value, 2),
-                'last_friday_value': round(last_friday_value, 2),
-                'okr_shift': round(shift, 2),
-                'kr_details_count': len(kr_details)
-            })
-            
-        return sorted(user_shifts, key=lambda x: x['okr_shift'], reverse=True)
     
+    def calculate_okr_shifts_by_user(self) -> List[Dict]:
+        """Calculate weekly OKR shifts"""
+        return self._calculate_okr_shifts_by_period("weekly")
+
     def calculate_okr_shifts_by_user_monthly(self) -> List[Dict]:
         """Calculate monthly OKR shifts"""
-        if self.final_df is None or self.final_df.empty:
-            return []
-            
         if not DateUtils.should_calculate_monthly_shift():
             return []
+        return self._calculate_okr_shifts_by_period("monthly")
+
+    def _calculate_okr_shifts_by_period(self, period: str) -> List[Dict]:
+        """Calculate OKR shifts for specified period"""
+        try:
+            users = self.final_df['goal_user_name'].dropna().unique()
+            user_okr_shifts = []
             
-        last_month_end = DateUtils.get_last_month_end_date()
-        date_str = last_month_end.strftime('%d/%m/%Y')
-        print(f"Calculating MONTHLY shift vs {date_str}...")
+            reference_date = DateUtils.get_last_friday_date() if period == "weekly" else DateUtils.get_last_month_end_date()
+            if period == "weekly":
+                 print(f"Calculating shift vs {reference_date.strftime('%d/%m/%Y')}...")
+            
+            for user in users:
+                user_df = self.final_df[self.final_df['goal_user_name'] == user].copy()
+                shift_data = self._calculate_user_shift_data(user_df, reference_date, period)
+                user_okr_shifts.append(shift_data)
+            
+            shift_key = 'okr_shift' if period == "weekly" else 'okr_shift_monthly'
+            return sorted(user_okr_shifts, key=lambda x: x[shift_key], reverse=True)
+            
+        except Exception as e:
+            print(f"Error calculating {period} OKR shifts: {e}")
+            return []
+
+    def _calculate_user_shift_data(self, user_df: pd.DataFrame, reference_date: datetime, period: str) -> Dict:
+        """Calculate shift data for a single user"""
+        user_name = user_df['goal_user_name'].iloc[0] if not user_df.empty else 'Unknown'
         
-        user_shifts = []
-        grouped = self.final_df.groupby('goal_user_name')
+        if period == "weekly":
+            return self._calculate_weekly_shift_data(user_df, user_name, reference_date)
+        else:
+            return self._calculate_monthly_shift_data(user_df, user_name, reference_date)
 
-        for user_name, group in grouped:
-            if pd.isna(user_name): continue
+    def _calculate_weekly_shift_data(self, user_df: pd.DataFrame, user_name: str, reference_friday: datetime) -> Dict:
+        """Calculate weekly shift data for user"""
+        final_okr_goal_shift = self._calculate_final_okr_goal_shift(user_df, reference_friday, "weekly")
+        current_value = self.okr_calculator.calculate_current_value(user_df)
+        reference_value, kr_details = self.okr_calculator.calculate_reference_value(reference_friday, user_df)
+        
+        # Áp dụng logic mới theo yêu cầu:
+        # 1. Nếu giá trị thứ 6 tuần trước > giá trị hiện tại thì giá trị thứ 6 = giá trị hiện tại - dịch chuyển tuần
+        # 2. Nếu giá trị thứ 6 tuần trước < giá trị hiện tại và (giá trị hiện tại - giá trị thứ 6 tuần trước) != dịch chuyển
+        #    thì dịch chuyển tuần = giá trị hiện tại - giá trị thứ 6 tuần trước
+        
+        adjusted_reference_value = reference_value
+        adjusted_okr_shift = final_okr_goal_shift
+        reference_adjustment_applied = False
+        shift_adjustment_applied = False
+        
+        # Quy tắc 1: Nếu reference_value > current_value
+        if reference_value > current_value:
+            adjusted_reference_value = current_value - final_okr_goal_shift
+            reference_adjustment_applied = True
+        
+        # Quy tắc 2: Nếu reference_value < current_value VÀ (current_value - reference_value) != shift
+        elif reference_value < current_value and (current_value - reference_value) != final_okr_goal_shift:
+            adjusted_okr_shift = current_value - reference_value
+            shift_adjustment_applied = True
+        
+        legacy_okr_shift = current_value - reference_value
 
-            current_value = OKRCalculator.calculate_current_value(group)
-            last_month_value, _ = OKRCalculator.calculate_reference_value(last_month_end, group)
-            shift = current_value - last_month_value
+        return {
+            'user_name': user_name,
+            'okr_shift': adjusted_okr_shift,
+            'original_shift': final_okr_goal_shift,
+            'current_value': current_value,
+            'last_friday_value': adjusted_reference_value,
+            'original_last_friday_value': reference_value,
+            'legacy_okr_shift': legacy_okr_shift,
+            'adjustment_applied': shift_adjustment_applied,
+            'reference_adjustment_applied': reference_adjustment_applied,
+            'kr_details_count': len(kr_details),
+            'reference_friday': reference_friday.strftime('%d/%m/%Y')
+        }
 
-            user_shifts.append({
-                'user_name': user_name,
-                'okr_shift_monthly': round(shift, 2)
-            })
+    def _calculate_monthly_shift_data(self, user_df: pd.DataFrame, user_name: str, reference_month_end: datetime) -> Dict:
+        """Calculate monthly shift data for user"""
+        final_okr_goal_shift_monthly = self._calculate_final_okr_goal_shift(user_df, reference_month_end, "monthly")
+        current_value = self.okr_calculator.calculate_current_value(user_df)
+        reference_value, kr_details = self.okr_calculator.calculate_reference_value(reference_month_end, user_df)
+        
+        # Kiểm tra xem có phải tuần 4 hoặc 5 của tháng đầu quý không
+        # Nếu đúng thì tính chuyển động tháng = điểm số hiện tại so với 0
+        if DateUtils.is_week_4_or_5_of_quarter_start_month():
+            adjusted_okr_shift = current_value  # current_value - 0
+            adjusted_reference_value = 0
+            reference_adjustment_applied = True
+            shift_adjustment_applied = True
+            legacy_okr_shift = current_value
+        else:
+            # Áp dụng logic mới theo yêu cầu:
+            # 1. Nếu giá trị cuối tháng trước > giá trị hiện tại thì giá trị cuối tháng = giá trị hiện tại - dịch chuyển tháng
+            # 2. Nếu giá trị cuối tháng trước < giá trị hiện tại và (giá trị hiện tại - giá trị cuối tháng trước) != dịch chuyển
+            #    thì dịch chuyển tháng = giá trị hiện tại - giá trị cuối tháng trước
             
-        return user_shifts
+            adjusted_reference_value = reference_value
+            adjusted_okr_shift = final_okr_goal_shift_monthly
+            reference_adjustment_applied = False
+            shift_adjustment_applied = False
+            
+            # Quy tắc 1: Nếu reference_value > current_value
+            if reference_value > current_value:
+                adjusted_reference_value = current_value - final_okr_goal_shift_monthly
+                reference_adjustment_applied = True
+            
+            # Quy tắc 2: Nếu reference_value < current_value VÀ (current_value - reference_value) != shift
+            elif reference_value < current_value and (current_value - reference_value) != final_okr_goal_shift_monthly:
+                adjusted_okr_shift = current_value - reference_value
+                shift_adjustment_applied = True
+            
+            legacy_okr_shift = current_value - reference_value
+
+        return {
+            'user_name': user_name,
+            'okr_shift_monthly': adjusted_okr_shift,
+            'original_shift_monthly': final_okr_goal_shift_monthly,
+            'current_value': current_value,
+            'last_month_value': adjusted_reference_value,
+            'original_last_month_value': reference_value,
+            'legacy_okr_shift_monthly': legacy_okr_shift,
+            'adjustment_applied': shift_adjustment_applied,
+            'reference_adjustment_applied': reference_adjustment_applied,
+            'kr_details_count': len(kr_details),
+            'reference_month_end': reference_month_end.strftime('%d/%m/%Y')
+        }
+
+    def _calculate_final_okr_goal_shift(self, user_df: pd.DataFrame, reference_date: datetime, period: str) -> float:
+        """Calculate final OKR goal shift"""
+        try:
+            unique_combinations = {}
+            
+            for _, row in user_df.iterrows():
+                goal_name = row.get('goal_name', '')
+                kr_name = row.get('kr_name', '')
+                
+                if not goal_name or not kr_name:
+                    continue
+                
+                combo_key = f"{goal_name}|{kr_name}"
+                kr_shift = self.okr_calculator.calculate_kr_shift(row, reference_date, self.final_df)
+                
+                if combo_key not in unique_combinations:
+                    unique_combinations[combo_key] = []
+                unique_combinations[combo_key].append(kr_shift)
+            
+            final_shifts = [
+                sum(kr_shifts) / len(kr_shifts) 
+                for kr_shifts in unique_combinations.values() 
+                if kr_shifts
+            ]
+            
+            return sum(final_shifts) / len(final_shifts) if final_shifts else 0
+            
+        except Exception as e:
+            print(f"Error calculating final_okr_goal_shift: {e}")
+            return 0
 
     def analyze_checkin_behavior(self) -> Tuple[List[Dict], List[Dict]]:
         """Analyze checkin behavior, both period-based and overall frequency"""
@@ -1679,8 +2170,11 @@ def get_goal_data(employee_name):
         cycles = analyzer.get_cycle_list()
         if not cycles: return None
         
-        # Chọn chu kỳ mới nhất
-        analyzer.checkin_path = cycles[0]['path']
+        # Tự động chọn chu kỳ mới nhất (do API không trả về start_date/end_date đầy đủ)
+        selected_cycle = cycles[0]
+        # print(f"Selected cycle: {selected_cycle['name']}")
+        
+        analyzer.checkin_path = selected_cycle['path']
         analyzer.load_and_process_data()
         
         # 1. Lấy dữ liệu biến động điểm số (Weekly Shift)
@@ -1719,6 +2213,13 @@ def get_goal_data(employee_name):
                 # Lọc goal của user
                 user_goals = df_goals[df_goals['goal_user_id'] == str(employee_user_id)].copy()
                 
+                # Fetch KRs data
+                df_krs = analyzer.api_client.get_krs_data(analyzer.checkin_path)
+                user_krs = pd.DataFrame()
+                if not df_krs.empty:
+                    # Filter KRs for this user (optional, but safer to match by goal_id later)
+                   user_krs = df_krs.copy() # Match by goal_id is safer
+
                 # Tính toán fraction_of_time
                 # Giả sử cycle là quý, lấy start_time từ cycle info
                 cycle_start = None
@@ -1761,18 +2262,33 @@ def get_goal_data(employee_name):
                         speed = (percent_complete / 100.0) / fraction_of_time
                     else:
                         speed = 0
-                        
+                    
+                    # Find KRs for this goal
+                    goal_id = str(row.get('goal_id'))
+                    filtered_krs = []
+                    if not user_krs.empty:
+                        # Ensure string comparison
+                        mask = user_krs['goal_id'].astype(str) == goal_id
+                        krs_for_goal = user_krs[mask]
+                        for _, kr_row in krs_for_goal.iterrows():
+                            filtered_krs.append({
+                                'name': kr_row.get('kr_name', 'Unknown KR'),
+                                'progress': float(kr_row.get('kr_current_value', 0))
+                            })
+
                     goals_list.append({
                         'name': row.get('goal_name', 'Unknown'),
                         'current_value': current_val,
-                        'speed': speed
+                        'speed': speed,
+                        'sub_goals': filtered_krs,
+                        'start_date': str(row.get('goal_since', ''))
                     })
 
         return {
             'weekly': employee_weekly,
             'checkin_behavior': employee_period_checkin,
             'overall_behavior': employee_overall_checkin,
-            'cycle_name': cycles[0]['name'],
+            'cycle_name': selected_cycle['name'],
             'goals_list': goals_list,
             'fraction_of_time': fraction_of_time,
             'raw_df_records': raw_goal_records
@@ -1787,13 +2303,38 @@ if __name__ == "__main__":
     # Get cycles
     cycles = analyzer.get_cycle_list()
     if cycles:
-        # Select first cycle
-        selected_cycle = cycles[0]
+        # Tự động chọn chu kỳ dựa trên ngày hiện tại
+        now = datetime.now()
+        selected_cycle = None
+        
+        # Tìm cycle phù hợp với thời gian hiện tại
+        for cycle in cycles:
+            # cycle['start_time'] là datetime object (UTC) từ get_cycle_list
+            start_date = cycle['start_time'].replace(tzinfo=None)  # convert to naive if needed or align tz
+            
+            # Giả định chu kỳ dài khoảng 90-100 ngày
+            end_date = start_date + timedelta(days=100)
+            
+            # So sánh naive vs naive hoặc aware vs aware. datetime.now() là naive local time.
+            # start_time từ get_cycle_list là UTC aware. Convert về local naive hoặc aware HCM.
+            start_date_hcm = cycle['start_time'].astimezone(hcm_tz).replace(tzinfo=None)
+            end_date_hcm = start_date_hcm + timedelta(days=100)
+            
+            if start_date_hcm <= now <= end_date_hcm:
+                selected_cycle = cycle
+                print(f"✅ Tự động chọn chu kỳ hiện tại: {cycle['name']}")
+                break
+        
+        # Nếu không tìm thấy, chọn chu kỳ mới nhất
+        if not selected_cycle:
+            selected_cycle = cycles[0]
+            print(f"⚠️ Không tìm thấy chu kỳ hiện tại trùng khớp, chọn chu kỳ mới nhất: {selected_cycle['name']}")
+
         analyzer.checkin_path = selected_cycle['path']
 
         # Load data
         df = analyzer.load_and_process_data()
-
+        df.to_csv('goal_data.csv', index=False,encoding='utf-8-sig')
         if df is not None:
             print(f"Loaded {len(df)} records")
 

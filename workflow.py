@@ -17,14 +17,23 @@ hcm_tz = pytz.timezone('Asia/Ho_Chi_Minh')
 # Global variable for user mapping
 user_id_to_name_map = {}
 
+# Token detection helpers
+def get_account_auth_data():
+    """Get authentication data dict with correct key for token v1 or v2"""
+    key = "access_token_v2" if "~" in ACCOUNT_ACCESS_TOKEN else "access_token"
+    return {key: ACCOUNT_ACCESS_TOKEN}
+
+def get_workflow_auth_data():
+    """Get authentication data dict for workflow API"""
+    key = "access_token_v2" if "~" in WORKFLOW_ACCESS_TOKEN else "access_token"
+    return {key: WORKFLOW_ACCESS_TOKEN}
+
 def load_user_mapping():
     """Tải user mapping từ Account API và lưu vào biến global"""
     global user_id_to_name_map
     try:
         url = "https://account.base.vn/extapi/v1/users/get_list"
-        payload = {
-            'access_token': ACCOUNT_ACCESS_TOKEN
-        }
+        payload = get_account_auth_data()
         headers = {'Content-Type': 'application/x-www-form-urlencoded'}
         
         response = requests.post(url, headers=headers, data=payload, timeout=30)
@@ -94,7 +103,7 @@ def get_workflow_data(employee_name, limit=10):
         
         while current_page_id < max_pages:
             payload = {
-                'access_token': WORKFLOW_ACCESS_TOKEN,
+                **get_workflow_auth_data(),
                 'page_id': current_page_id
             }
             

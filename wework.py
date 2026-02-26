@@ -68,6 +68,17 @@ class WeWorkAPIClient:
     def __init__(self, goal_token: Optional[str] = None, account_token: Optional[str] = None):
         self.goal_token = goal_token or WEWORK_ACCESS_TOKEN
         self.account_token = account_token or ACCOUNT_ACCESS_TOKEN
+        # Auto-detect token version
+        self.goal_token_key = "access_token_v2" if "~" in self.goal_token else "access_token"
+        self.account_token_key = "access_token_v2" if "~" in self.account_token else "access_token"
+    
+    def _get_goal_auth_data(self):
+        """Get authentication data for goal/wework API"""
+        return {self.goal_token_key: self.goal_token}
+    
+    def _get_account_auth_data(self):
+        """Get authentication data for account API"""
+        return {self.account_token_key: self.account_token}
 
     def _make_request(self, url: str, data: Dict[str, Any]) -> requests.Response:
         """Make HTTP request with error handling"""
@@ -81,7 +92,7 @@ class WeWorkAPIClient:
     def get_filtered_members(self) -> pd.DataFrame:
         """Get filtered members from account API"""
         url = "https://account.base.vn/extapi/v1/group/get"
-        data = {"access_token": self.account_token, "path": "nvvanphong"}
+        data = {**self._get_account_auth_data(), "path": "nvvanphong"}
 
         response = self._make_request(url, data)
         response_data = response.json()
@@ -94,7 +105,8 @@ class WeWorkAPIClient:
                 'name': m.get('name', ''),
                 'username': m.get('username', ''),
                 'job': m.get('title', ''),
-                'email': m.get('email', '')
+                'email': m.get('email', ''),
+                'since': m.get('since', '')
             }
             for m in members
         ])
@@ -119,14 +131,14 @@ class WeWorkAPIClient:
         try:
             # Get projects
             projects_url = "https://wework.base.vn/extapi/v3/project/list"
-            p_response = self._make_request(projects_url, {'access_token': self.goal_token})
+            p_response = self._make_request(projects_url, self._get_goal_auth_data())
             projects = p_response.json().get('projects', [])
             for p in projects:
                 project_map[str(p['id'])] = p['name']
                 
             # Get departments
             depts_url = "https://wework.base.vn/extapi/v3/department/list"
-            d_response = self._make_request(depts_url, {'access_token': self.goal_token})
+            d_response = self._make_request(depts_url, self._get_goal_auth_data())
             depts = d_response.json().get('departments', [])
             for d in depts:
                 project_map[str(d['id'])] = d['name']
@@ -136,7 +148,7 @@ class WeWorkAPIClient:
         # 3. Get tasks from /user/tasks
         url = "https://wework.base.vn/extapi/v3/user/tasks"
         payload = {
-            'access_token': self.goal_token,
+            **self._get_goal_auth_data(),
             'user': user_id
         }
         
@@ -169,7 +181,7 @@ class WeWorkAPIClient:
         try:
             url = "https://wework.base.vn/extapi/v3/task/custom.table"
             data = {
-                'access_token': self.goal_token,
+                **self._get_goal_auth_data(),
                 'id': task_id
             }
 
@@ -217,7 +229,7 @@ class WeWorkAPIClient:
         """Get user activities from /user/activities API"""
         url = "https://wework.base.vn/extapi/v2/user/activities"
         payload = {
-            'access_token': self.goal_token,
+            **self._get_goal_auth_data(),
             'username': username,
             'items_per_page': 1000
         }
@@ -652,6 +664,11 @@ def calculate_time_period(period_name: str) -> tuple:
 
     return start_date, end_date
 
+def get_wework_auth_data():
+    """Helper for standalone function to get auth data"""
+    key = "access_token_v2" if "~" in WEWORK_ACCESS_TOKEN else "access_token"
+    return {key: WEWORK_ACCESS_TOKEN}
+
 def get_wework_data(username):
     """Lấy dữ liệu WeWork - Tất cả task trong 1 tháng gần đây (Sử dụng API /user/tasks)"""
     try:
@@ -686,7 +703,7 @@ def get_wework_data(username):
         print(f"📋 Đang lấy tasks từ API /user/tasks...")
         url = "https://wework.base.vn/extapi/v3/user/tasks"
         payload = {
-            'access_token': WEWORK_ACCESS_TOKEN,
+            **get_wework_auth_data(),
             'user': user_id
         }
         
@@ -708,14 +725,14 @@ def get_wework_data(username):
         print("📋 Đang tải mapping dự án...")
         try:
             projects_url = "https://wework.base.vn/extapi/v3/project/list"
-            p_response = requests.post(projects_url, data={'access_token': WEWORK_ACCESS_TOKEN}, timeout=30)
+            p_response = requests.post(projects_url, data=get_wework_auth_data(), timeout=30)
             p_data = p_response.json()
             projects = p_data.get('projects', [])
             project_map = {str(p['id']): p['name'] for p in projects}
             
             # Lấy thêm departments
             depts_url = "https://wework.base.vn/extapi/v3/department/list"
-            d_response = requests.post(depts_url, data={'access_token': WEWORK_ACCESS_TOKEN}, timeout=30)
+            d_response = requests.post(depts_url, data=get_wework_auth_data(), timeout=30)
             d_data = d_response.json()
             depts = d_data.get('departments', [])
             for d in depts:
@@ -731,6 +748,30 @@ def get_wework_data(username):
             # Bỏ qua subtask
             if task.get('metatype') == 'subtask':
                 continue
+                
+            # --- STRICT FILTERING LOGIC ---
+            t_user_id = str(task.get('user_id', ''))
+            t_creator_id = str(task.get('creator_id', ''))
+            t_username = str(task.get('username', '')).strip()
+            
+            is_assigned_to_me = (t_user_id == str(user_id))
+            
+            # Check for unassigned status stricter: 
+            # ID must be 0/empty AND username must not indicate another person
+            is_unassigned_id = (t_user_id == "0" or not t_user_id)
+            
+            # If username is present (not 0/empty) and different from me, it IS assigned to someone
+            is_actually_unassigned = is_unassigned_id
+            if t_username and t_username != '0':
+                # If username exists and is not me, then it's assigned to others
+                if t_username.lower() != username.lower():
+                    is_actually_unassigned = False
+
+            is_self_created_unassigned = (t_creator_id == str(user_id) and is_actually_unassigned)
+            
+            if not (is_assigned_to_me or is_self_created_unassigned):
+                continue
+            # -------------------------------
 
             # Bổ sung project_name
             p_id = str(task.get('project_id', ''))
@@ -769,11 +810,14 @@ def get_wework_data(username):
             if not t.get('deadline') or str(t.get('deadline')) == '0':
                 no_deadline_count += 1
                 
-        # 3. Overdue Tasks
+        # 3. Overdue Tasks (filter to last 30 days only)
         overdue_tasks = []
+        one_month_ago_ts = now_ts - (30 * 86400)  # 30 days ago
         for t in active_tasks:
             if t.get('deadline') and str(t.get('deadline')) != '0':
-                if float(t['deadline']) < now_ts:
+                deadline_ts = float(t['deadline'])
+                # Only include if overdue AND deadline is within last 30 days
+                if deadline_ts < now_ts and deadline_ts >= one_month_ago_ts:
                     p_id = str(t.get('project_id', ''))
                     if p_id and p_id in project_map and not t.get('project_name'):
                         t['project_name'] = project_map[p_id]
